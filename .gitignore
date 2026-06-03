@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Logs locales (Render los muestra en su dashboard, no se necesitan en el repo)
+logs/
+*.log
+*.log.bak
+
+# Certificados TLS (nunca subir al repo)
+cert/
+*.pem
+*.key
+*.crt
+
+# Credenciales
+*.json
+google_credentials.txt
+.env
+.env.*
+
+# Editores e IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code
+.claude/

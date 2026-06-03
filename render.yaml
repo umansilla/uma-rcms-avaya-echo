@@ -1,0 +1,31 @@
+# render.yaml — Infraestructura como código para Render.com
+# Documentación: https://render.com/docs/blueprint-spec
+#
+# Render maneja TLS automáticamente: el cliente se conecta por WSS (wss://...)
+# y Render hace el TLS termination antes de pasar la conexión al servicio.
+# Por eso NO necesitamos pasar --ssl-cert ni --ssl-key aquí.
+
+services:
+  - type: web               # Web Service (soporta WebSockets)
+    name: avaya-echo-bot
+    runtime: python         # Entorno de ejecución Python
+    region: ohio            # us-east-1 / cambia a "oregon" (us-west) si prefieres
+    plan: free              # Cambia a "starter" o superior para producción
+
+    # Render ejecuta este comando para instalar dependencias
+    buildCommand: pip install -r requirements.txt
+
+    # Render ejecuta este comando para arrancar el servicio
+    startCommand: python main.py
+
+    # Variables de entorno disponibles en tiempo de ejecución
+    # PORT es inyectada automáticamente por Render — no la pongas aquí
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+
+    # Render hace health checks en /healthz por defecto para servicios web.
+    # Como somos un servidor WebSocket puro (sin HTTP), usamos una ruta
+    # que simplemente cierre la conexión (Render acepta 200 ó 101).
+    # Si quieres, puedes añadir un endpoint HTTP de healthcheck en echo_server.py.
+    healthCheckPath: /healthz
