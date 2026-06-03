@@ -1,2 +1,4 @@
-websockets>=12.0
+# websockets 14 cambió a una nueva API asyncio que rompe el código legacy.
+# Pineamos a <14 para usar la API websockets.server.WebSocketServerProtocol.
+websockets>=12.0,<14.0
 PyJWT>=2.0

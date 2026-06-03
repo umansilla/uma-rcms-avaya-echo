@@ -248,6 +248,9 @@ class EchoServer:
         Cada conexión es una coroutine independiente. El loop de mensajes
         despacha texto (JSON) y bytes (frames binarios) al manejador correcto.
         Al desconectarse, se limpia todo el estado de esa conexión.
+
+        Nota: Render y su load balancer hacen probes TCP y HTTP periódicos.
+        Las conexiones vacías (EOFError) son normales y se ignoran silenciosamente.
         """
         client_id = "{}:{}".format(*websocket.remote_address)
         self._seq[client_id] = 0
@@ -264,6 +267,12 @@ class EchoServer:
                     logger.exception("[%s] Error procesando mensaje", client_id)
         except websockets.exceptions.ConnectionClosed:
             logger.info("[%s] Conexión cerrada", client_id)
+        except websockets.exceptions.InvalidMessage:
+            # Probes HTTP del load balancer (HEAD, conexiones vacías) — normal en Render
+            logger.debug("[%s] Probe HTTP ignorado", client_id)
+        except EOFError:
+            # Probe TCP: conexión abierta y cerrada sin datos — normal en Render
+            logger.debug("[%s] Probe TCP ignorado", client_id)
         except Exception:
             logger.exception("[%s] Error en conexión", client_id)
         finally:
@@ -714,15 +723,17 @@ class EchoServer:
         """
         Intercepta peticiones HTTP antes del handshake WebSocket.
 
-        Render.com (y cualquier load balancer) hace GET /healthz para saber
-        si el servicio está vivo. Este handler responde con HTTP 200 OK
-        sin necesidad de un servidor HTTP separado.
+        Render hace health checks con GET y HEAD en la ruta configurada.
+        El load balancer también hace probes TCP que llegan como conexiones
+        vacías (EOFError) — esas se suprimen en handle_connection.
 
-        Si la ruta NO es /healthz, retorna None para que websockets continúe
-        con el handshake WebSocket normal.
+        - GET  /healthz → 200 OK
+        - HEAD /healthz → 200 OK  (Render usa HEAD para health checks)
+        - Cualquier otra ruta → None (websockets continúa con el upgrade WS)
         """
-        if path == "/healthz":
-            return (http.HTTPStatus.OK, [], b"OK\n")
+        if path in ("/healthz", "/"):
+            # Devolvemos vacío en el body para HEAD (el cliente lo ignora)
+            return (http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"OK\n")
         return None  # Continúa con el upgrade a WebSocket
 
     async def start(self) -> None:
