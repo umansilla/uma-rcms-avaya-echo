@@ -311,7 +311,13 @@ class EchoServer:
 
             if msg_type == "session.start":
                 await self._on_session_start(ws, client_id, data)
+            elif msg_type == "bot.start":
+                # La plataforma Avaya envía bot.start con botId="echo", no echo.start directamente
+                await self._on_bot_start(ws, client_id, data)
+            elif msg_type == "bot.end":
+                await self._on_bot_end(ws, client_id, data)
             elif msg_type == "echo.start":
+                # Soporte directo por compatibilidad con clientes que lo envían directamente
                 await self._on_echo_start(ws, client_id, data)
             elif msg_type == "echo.end":
                 await self._on_echo_end(ws, client_id, data)
@@ -322,7 +328,8 @@ class EchoServer:
             elif msg_type == "session.ping":
                 await self._on_session_ping(ws, client_id, data)
             else:
-                logger.warning("[%s] Tipo de mensaje no manejado: %s", client_id, msg_type)
+                logger.warning("[%s] Tipo de mensaje no manejado: %s | payload: %s",
+                               client_id, msg_type, json.dumps(data)[:200])
 
     @staticmethod
     def _split_batched_json(raw: str) -> list[str]:
@@ -531,22 +538,89 @@ class EchoServer:
         self.sessions[session_id] = session
 
         # ── Paso 5: Enviar session.started ───────────────────────────────
+        #
+        # Si el cliente incluyó "services" en el payload, devolvemos cuáles
+        # soportamos. La plataforma Avaya necesita ver "echo" en la respuesta
+        # antes de enviar bot.start / echo.start.
+        requested_services  = payload.get("services", [])
+        supported_services  = ["echo"]
+        acknowledged        = [s for s in requested_services if s in supported_services]
+
+        response_payload: Dict[str, Any] = {
+            "mediaTransport": {
+                "type":              transport_block.get("type", "avaya-wss"),
+                "transportEncoding": selected_encoding,
+                "mediaCodecs":       [selected_codec],
+            }
+        }
+        if acknowledged:
+            response_payload["services"] = acknowledged
+
         response = {
             "version":     "1.0.0",
             "type":        "session.started",
             "sessionId":   session_id,
             "sequenceNum": self._next_seq(client_id),
             "timestamp":   self._now(),
-            "payload": {
-                "mediaTransport": {
-                    "type":              transport_block.get("type", "avaya-wss"),
-                    "transportEncoding": selected_encoding,
-                    "mediaCodecs":       [selected_codec],
-                }
-            },
+            "payload":     response_payload,
         }
-        logger.info("[%s] → session.started (codec=%s encoding=%s)", client_id, codec_name, selected_encoding)
+        logger.info(
+            "[%s] → session.started (codec=%s encoding=%s services=%s)",
+            client_id, codec_name, selected_encoding, acknowledged or "[]",
+        )
         await ws.send(json.dumps(response))
+
+    # ── bot.start / bot.end ────────────────────────────────────────────────
+    #
+    # La plataforma Avaya envía "bot.start" con botId="echo" en lugar de
+    # "echo.start" directamente. El patrón original usa un plugin bot_service
+    # que traduce bot.start → echo.start internamente.
+    # Hacemos lo mismo aquí sin la capa de plugins.
+
+    async def _on_bot_start(
+        self,
+        ws:        WebSocketServerProtocol,
+        client_id: str,
+        data:      dict,
+    ) -> None:
+        """
+        Maneja 'bot.start': si botId=="echo" activa el eco igual que echo.start.
+
+        Payload esperado:
+        {
+          "type": "bot.start",
+          "sessionId": "...",
+          "payload": { "botId": "echo", "endpointId": "..." }
+        }
+        """
+        payload = data.get("payload", {})
+        bot_id  = (payload.get("botId") or "").strip().lower()
+        ep_id   = payload.get("endpointId", "")
+
+        logger.info("[%s] bot.start — botId=%s endpointId=%s", client_id, bot_id, ep_id)
+
+        if bot_id == "echo":
+            # Reusamos _on_echo_start pasando los mismos campos
+            await self._on_echo_start(ws, client_id, data)
+        else:
+            logger.warning("[%s] bot.start: botId '%s' no soportado (solo 'echo')", client_id, bot_id)
+
+    async def _on_bot_end(
+        self,
+        ws:        WebSocketServerProtocol,
+        client_id: str,
+        data:      dict,
+    ) -> None:
+        """Maneja 'bot.end': si botId=="echo" desactiva el eco."""
+        payload = data.get("payload", {})
+        bot_id  = (payload.get("botId") or "").strip().lower()
+
+        logger.info("[%s] bot.end — botId=%s", client_id, bot_id)
+
+        if bot_id == "echo":
+            await self._on_echo_end(ws, client_id, data)
+        else:
+            logger.warning("[%s] bot.end: botId '%s' no soportado", client_id, bot_id)
 
     async def _on_echo_start(
         self,
